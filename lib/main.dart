@@ -1,5 +1,4 @@
 import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
@@ -16,8 +15,7 @@ class OneTeleApp extends StatelessWidget {
     return MaterialApp(
       title: 'OneTele',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-          useMaterial3: true, colorSchemeSeed: const Color(0xFF14B8A6)),
+      theme: ThemeData(useMaterial3: true, colorSchemeSeed: const Color(0xFF14B8A6)),
       home: const TeleprompterScreen(),
     );
   }
@@ -37,31 +35,42 @@ class _TeleprompterScreenState extends State<TeleprompterScreen> {
 
   // Display settings. When null, a viewport-relative default is used so the
   // first render matches the reference screenshot on any screen size.
-  double? _fontSize; // px
-  double? _maxWidth; // px (wrap width of the text column)
-  double _topFraction = 0.155; // distance from top as fraction of height
+  double? _fontSize;     // px
+  double? _maxWidth;     // px (wrap width of the text column)
+  double _topFraction = 0.09; // distance from top as fraction of height
 
-  bool _dark = false; // false = white bg / black text
+  bool _dark = false;        // false = white bg / black text
   bool _showControls = true;
-  bool _showLogo = true; // faint centered OneTELE watermark
+  bool _showLogo = true;     // faint centered OneTELE watermark
 
   // When non-null ('font' | 'width' | 'top'), arrow keys adjust that slider
   // instead of changing the question.
   String? _selectedControl;
 
-  // ---- Tuned to the reference screenshot (proportional, so it scales) ----
-  static const double _defaultFontFraction = 0.033; // ~ cap height of the SS
-  static const double _defaultWidthFraction = 0.60; // centered column width
+  // Inline editing of the displayed question.
+  bool _editing = false;
+  final TextEditingController _editController = TextEditingController();
+  final FocusNode _editFocus = FocusNode();
+
+  // ---- Default display settings ----
+  static const double _defaultFontSize = 18.0;      // px
+  static const double _defaultWidthFraction = 0.26; // centered column width
 
   @override
   void initState() {
     super.initState();
     HardwareKeyboard.instance.addHandler(_handleKey);
+    // Commit the edit when the field loses focus (tap away / Esc / slider use).
+    _editFocus.addListener(() {
+      if (!_editFocus.hasFocus && _editing) _commitEdit();
+    });
   }
 
   @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleKey);
+    _editController.dispose();
+    _editFocus.dispose();
     super.dispose();
   }
 
@@ -71,6 +80,15 @@ class _TeleprompterScreenState extends State<TeleprompterScreen> {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) return false;
     final k = event.logicalKey;
 
+    // While editing, let the text field own the keyboard (arrows move the
+    // cursor, typing works normally). Esc finishes editing.
+    if (_editing) {
+      if (k == LogicalKeyboardKey.escape) {
+        _editFocus.unfocus();
+        return true;
+      }
+      return false;
+    }
     // If a slider is selected, arrow keys adjust its value.
     if (_selectedControl != null) {
       if (k == LogicalKeyboardKey.arrowLeft ||
@@ -124,6 +142,29 @@ class _TeleprompterScreenState extends State<TeleprompterScreen> {
     return false;
   }
 
+  // Click the displayed question to edit it in place.
+  void _enterEdit() {
+    if (_questions.isEmpty || _editing) return;
+    _editController.text = _questions[_index];
+    _editController.selection =
+        TextSelection.collapsed(offset: _editController.text.length);
+    setState(() {
+      _editing = true;
+      _selectedControl = null;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _editFocus.requestFocus());
+  }
+
+  // Save the edited text back into the current question (in memory).
+  void _commitEdit() {
+    if (!_editing) return;
+    final text = _editController.text.trimRight();
+    setState(() {
+      if (text.trim().isNotEmpty) _questions[_index] = text;
+      _editing = false;
+    });
+  }
+
   void _go(int i) {
     if (_questions.isEmpty) return;
     final clamped = i.clamp(0, _questions.length - 1);
@@ -135,7 +176,7 @@ class _TeleprompterScreenState extends State<TeleprompterScreen> {
     final size = MediaQuery.of(context).size;
     switch (_selectedControl) {
       case 'font':
-        final cur = _fontSize ?? size.height * _defaultFontFraction;
+        final cur = _fontSize ?? _defaultFontSize;
         setState(() => _fontSize = (cur + dir * 2).clamp(16.0, 160.0));
         break;
       case 'width':
@@ -143,8 +184,7 @@ class _TeleprompterScreenState extends State<TeleprompterScreen> {
         setState(() => _maxWidth = (cur + dir * 20).clamp(240.0, size.width));
         break;
       case 'top':
-        setState(
-            () => _topFraction = (_topFraction + dir * 0.01).clamp(0.0, 0.6));
+        setState(() => _topFraction = (_topFraction + dir * 0.01).clamp(0.0, 0.6));
         break;
     }
   }
@@ -232,7 +272,7 @@ class _TeleprompterScreenState extends State<TeleprompterScreen> {
     final bg = _dark ? Colors.black : Colors.white;
     final fg = _dark ? Colors.white : Colors.black;
 
-    final fontSize = _fontSize ?? size.height * _defaultFontFraction;
+    final fontSize = _fontSize ?? _defaultFontSize;
     final maxWidth = _maxWidth ?? size.width * _defaultWidthFraction;
 
     return Scaffold(
@@ -256,9 +296,13 @@ class _TeleprompterScreenState extends State<TeleprompterScreen> {
           Positioned.fill(
             child: GestureDetector(
               behavior: HitTestBehavior.translucent,
-              onTap: _selectedControl == null
-                  ? null
-                  : () => setState(() => _selectedControl = null),
+              onTap: () {
+                if (_editing) {
+                  _editFocus.unfocus(); // commits via focus listener
+                } else if (_selectedControl != null) {
+                  setState(() => _selectedControl = null);
+                }
+              },
               child: _questions.isEmpty
                   ? _EmptyState(dark: _dark, onPick: _pickFile)
                   : Padding(
@@ -267,21 +311,72 @@ class _TeleprompterScreenState extends State<TeleprompterScreen> {
                         alignment: Alignment.topCenter,
                         child: SizedBox(
                           width: maxWidth,
-                          child: Text(
-                            _questions[_index],
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: fg,
-                              fontSize: fontSize,
-                              height: 1.35,
-                              fontWeight: FontWeight.w400,
-                            ),
-                          ),
+                          child: _editing
+                              ? TextField(
+                                  controller: _editController,
+                                  focusNode: _editFocus,
+                                  autofocus: true,
+                                  textAlign: TextAlign.center,
+                                  maxLines: null,
+                                  keyboardType: TextInputType.multiline,
+                                  cursorColor: fg,
+                                  style: TextStyle(
+                                    color: fg,
+                                    fontSize: fontSize,
+                                    height: 1.35,
+                                    fontWeight: FontWeight.w400,
+                                  ),
+                                  decoration: const InputDecoration(
+                                    isDense: true,
+                                    border: InputBorder.none,
+                                    focusedBorder: InputBorder.none,
+                                    enabledBorder: InputBorder.none,
+                                    contentPadding: EdgeInsets.zero,
+                                  ),
+                                )
+                              : MouseRegion(
+                                  cursor: SystemMouseCursors.text,
+                                  child: GestureDetector(
+                                    onTap: _enterEdit,
+                                    child: Text(
+                                      _questions[_index],
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                        color: fg,
+                                        fontSize: fontSize,
+                                        height: 1.35,
+                                        fontWeight: FontWeight.w400,
+                                      ),
+                                    ),
+                                  ),
+                                ),
                         ),
                       ),
                     ),
             ),
           ),
+
+          // Small "editing" hint
+          if (_editing)
+            Positioned(
+              top: 12,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.78),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: const Text(
+                    'Editing — click away or press Esc to finish',
+                    style: TextStyle(color: Colors.white, fontSize: 12),
+                  ),
+                ),
+              ),
+            ),
 
           // Small persistent toggle so controls can be brought back
           if (!_showControls)
@@ -468,7 +563,8 @@ class _ControlBar extends StatelessWidget {
               IconButton(
                 tooltip: 'Logo watermark  (L)',
                 onPressed: onToggleLogo,
-                icon: Icon(showLogo ? Icons.image : Icons.hide_image_outlined,
+                icon: Icon(
+                    showLogo ? Icons.image : Icons.hide_image_outlined,
                     color: onColor),
               ),
               IconButton(
@@ -582,8 +678,7 @@ class _LabeledSlider extends StatelessWidget {
                         if (selected)
                           const Padding(
                             padding: EdgeInsets.only(right: 4),
-                            child:
-                                Icon(Icons.keyboard, size: 13, color: accent),
+                            child: Icon(Icons.keyboard, size: 13, color: accent),
                           ),
                         Text(
                           label,
@@ -666,17 +761,13 @@ class _Watermark extends StatelessWidget {
             SizedBox(
               width: 150,
               height: 150,
-              child:
-                  CustomPaint(painter: OneMarkPainter(const Color(0xFF7C3AED))),
+              child: CustomPaint(painter: OneMarkPainter(const Color(0xFF7C3AED))),
             ),
             const SizedBox(width: 24),
             Text.rich(
               TextSpan(children: const [
-                TextSpan(
-                    text: 'One', style: TextStyle(fontWeight: FontWeight.w500)),
-                TextSpan(
-                    text: 'TELE',
-                    style: TextStyle(fontWeight: FontWeight.w800)),
+                TextSpan(text: 'One', style: TextStyle(fontWeight: FontWeight.w500)),
+                TextSpan(text: 'TELE', style: TextStyle(fontWeight: FontWeight.w800)),
               ]),
               style: TextStyle(
                 fontSize: 120,
