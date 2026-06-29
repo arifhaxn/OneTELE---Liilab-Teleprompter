@@ -1,11 +1,11 @@
 {
-    "name": "one_tele",
-    "short_name": "one_tele",
+    "name": "OneTele",
+    "short_name": "OneTele",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "OneTele - a simple docx-driven teleprompter.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
